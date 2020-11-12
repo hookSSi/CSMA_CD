@@ -363,3 +363,4 @@ FodyWeavers.xsd
 
 # text file
 *.txt
+DC.vcxproj

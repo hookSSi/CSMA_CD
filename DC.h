@@ -1,12 +1,48 @@
 #pragma once
 #include<string>
 #include<vector>
-#include<pthread.h>
+#include<queue>
 
 const int NODE_NUM = 4;
 
 namespace DC
 {
+	enum class REQUEST_TYPE
+	{
+		SEND_REQUEST,
+		RETRY_REQUEST
+	};
+
+	struct Request
+	{
+		int from;
+		int dest;
+		REQUEST_TYPE type;
+		int count;
+
+		Request(int p_from, int p_dest, REQUEST_TYPE p_type, int p_count) : from(p_from), dest(p_dest), type(p_type), count(p_count) {}
+		Request(int p_from, int p_dest) { Request(p_from, p_dest, REQUEST_TYPE::SEND_REQUEST, 0); }
+	};
+
+	enum class RESULT_TYPE
+	{
+		SUCCESS,
+		FAILED
+	};
+
+	struct Result
+	{
+		int from;
+		int dest;
+		REQUEST_TYPE requestType;
+		int count;
+		int waitTime;
+		RESULT_TYPE result;
+
+		Result(int p_from, int p_dest, REQUEST_TYPE p_requestType, int p_count, RESULT_TYPE p_result) : from(p_from), dest(p_dest), requestType(p_requestType), count(p_count), result(p_result) {}
+		void SetWaitTime(int p_waitTime) { waitTime = p_waitTime; }
+	};
+
     struct MessageData
     {
         int t;
@@ -30,8 +66,11 @@ namespace DC
     {
     private:
         int _id;
+		int _transmitTime = 5;
         LinkBus* _linkedBus;
         bool _isActive;
+
+		std::queue<Result*> resultQueue; // 메모리 해제해야함?
 
         int _prevTime;
         int _waitTime;
@@ -55,6 +94,8 @@ namespace DC
 
         void RandomSomething(int probability, void (NodeComputer::*func)(int));
         void SendRequest(int dest);
+		void GetResult(Result* result);
+		void ProcessResult(const Result* result);
         bool IsActive() { return _isActive; }
         int GetId() { return _id; }
         ~NodeComputer();
@@ -67,6 +108,8 @@ namespace DC
         int _timeLimit;
         bool _isActive;
         bool _isValid;
+
+		std::queue<Request*> requestQueue;
 
         int _prevTime;
         int _waitTime;
@@ -85,7 +128,9 @@ namespace DC
         void Init();
         void Update();
 
-        void GetRequest(int from, int dest);
+        void GetRequest(Request* request);
+		Result* ProcessRequest(const Request* request);
+		void SendResult(Result* result);
 
         NodeComputer* GetNode(int id);
         bool CollisionCheck(int dest);

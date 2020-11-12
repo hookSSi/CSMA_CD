@@ -94,7 +94,9 @@ void NodeComputer::Init()
 /// </summary>
 void NodeComputer::SendRequest(int dest)
 {
-    _linkedBus->GetRequest(this->_id, dest);
+	Request* request = new Request(this->_id, dest);
+	_linkedBus->GetRequest(request);
+	_state = NODE_STATE::WAITING;
 }
 
 void NodeComputer::Update()
@@ -103,6 +105,7 @@ void NodeComputer::Update()
     if (!_linkedBus->IsActive())
     {
         _isActive = false;
+		mtx.unlock();
         return;
     }
 
@@ -114,11 +117,12 @@ void NodeComputer::Update()
             std::string nodeName = "Node" + std::to_string(this->_id);
             MessageData msg(_prevTime + _waitTime, _msg);
             AddLogToFile(nodeName, msg);
-            _state = NODE_STATE::NORMAL;
+
+			_state = NODE_STATE::NORMAL;
         }
         break;
     case DC::NODE_STATE::RETRY:
-        if (_linkedBus->GetSystemClock() >= (_prevTime + _waitTime)) // 큐로 관리해야하나?
+        if (_linkedBus->GetSystemClock() >= (_prevTime + _waitTime))
         {
             NodeComputer::SendRequest(_savedDest);
         }
@@ -149,6 +153,16 @@ void NodeComputer::RandomSomething(int probability, void (NodeComputer::*func)(i
             (this->*func)(dest);
         }
     }
+}
+
+void NodeComputer::GetResult(Result* result)
+{
+	this->resultQueue.push(result);
+}
+
+void NodeComputer::ProcessResult(const Result* result)
+{
+
 }
 
 void NodeComputer::Wait(int t, int range, std::string msg)
@@ -198,6 +212,13 @@ void LinkBus::Update()
             mtx.unlock();
             return;
         }
+
+		while (!this->requestQueue.empty())
+		{
+			this->ProcessRequest(this->requestQueue.front());
+			this->requestQueue.pop();
+		}
+
         this->_systemClock += 1;
 
         if (_systemClock >= (_prevTime + _waitTime) && !_isValid)
@@ -208,6 +229,7 @@ void LinkBus::Update()
             this->_waitTime = 0;
             this->_msg = "";
         }
+
         mtx.unlock();
 
         if (_isValid)
@@ -218,58 +240,117 @@ void LinkBus::Update()
     }
 }
 
-void LinkBus::GetRequest(int from, int dest)
+void LinkBus::GetRequest(Request* request)
 {
-    MessageData msg(_systemClock, "Data Send Request To Node" + std::to_string(dest));
-    std::string path = "Node" + std::to_string(from);
-    AddLogToFile(path, msg);
+	this->requestQueue.push(request);
 
-    if (LinkBus::CollisionCheck(dest))
-    {
-        MessageData msg(_systemClock, "Accept: Node" + std::to_string(from) + " Data Send Request To Node" + std::to_string(dest));
-        AddLogToFile("Link", msg);
+    //MessageData msg(_systemClock, "Data Send Request To Node" + std::to_string(dest));
+    //std::string path = "Node" + std::to_string(from);
+    //AddLogToFile(path, msg);
 
-        // from 에게 알림
-        msg.Set(_systemClock, "Data Send Request Accept from Link");
-        path = "Node" + std::to_string(from);
-        AddLogToFile(path, msg);
+    //if (LinkBus::CollisionCheck(dest))
+    //{
+    //    MessageData msg(_systemClock, "Accept: Node" + std::to_string(from) + " Data Send Request To Node" + std::to_string(dest));
+    //    AddLogToFile("Link", msg);
 
-        // dest 에게 알림
-        msg.Set(_systemClock, "Data Receive Start from Node" + std::to_string(from));
-        path = "Node" + std::to_string(dest);
-        AddLogToFile(path, msg);
+    //    // from 에게 알림
+    //    msg.Set(_systemClock, "Data Send Request Accept from Link");
+    //    path = "Node" + std::to_string(from);
+    //    AddLogToFile(path, msg);
 
-        NodeComputer* fromNode = GetNode(from);
-        NodeComputer* destNode = GetNode(dest);
+    //    // dest 에게 알림
+    //    msg.Set(_systemClock, "Data Receive Start from Node" + std::to_string(from));
+    //    path = "Node" + std::to_string(dest);
+    //    AddLogToFile(path, msg);
 
-        // 전송시간 5 msec
-        fromNode->Wait(_systemClock, 5, "Data Send Finished To Node" + std::to_string(dest));
-        destNode->Wait(_systemClock, 5, "Data Receive Finished From Node" + std::to_string(from));
+    //    NodeComputer* fromNode = GetNode(from);
+    //    NodeComputer* destNode = GetNode(dest);
 
-        _waitTime = 5;
-        _prevTime = _systemClock;
-        _msg = "Node" + std::to_string(from) + " Data Send Finished To Node" + std::to_string(dest);
-    }
-    else
-    {
-        // Link에게 알림
-        MessageData msg(_systemClock, "Reject: Node" + std::to_string(from) + " Data Send Request To Node" + std::to_string(dest));
-        AddLogToFile("Link", msg);
+    //    // 전송시간 5 msec
+    //    fromNode->Wait(_systemClock, 5, "Data Send Finished To Node" + std::to_string(dest));
+    //    destNode->Wait(_systemClock, 5, "Data Receive Finished From Node" + std::to_string(from));
 
-        // from 에게 알림
-        msg.Set(_systemClock, "Data Send Request Reject from Link");
-        path = "Node" + std::to_string(from);
-        AddLogToFile(path, msg);
+    //    _waitTime = 5;
+    //    _prevTime = _systemClock;
+    //    _msg = "Node" + std::to_string(from) + " Data Send Finished To Node" + std::to_string(dest);
+    //}
+    //else
+    //{
+    //    // Link에게 알림
+    //    MessageData msg(_systemClock, "Reject: Node" + std::to_string(from) + " Data Send Request To Node" + std::to_string(dest));
+    //    AddLogToFile("Link", msg);
 
-        NodeComputer* fromNode = GetNode(from);
-        int waitTime = BackoffTimer(_nodeArr.size());
+    //    // from 에게 알림
+    //    msg.Set(_systemClock, "Data Send Request Reject from Link");
+    //    path = "Node" + std::to_string(from);
+    //    AddLogToFile(path, msg);
 
-        std::string nodeName = "Node" + std::to_string(from);
-        msg.Set(_systemClock, "Exponential Back-off Time: " + std::to_string(waitTime) + " msec");
-        AddLogToFile(nodeName, msg);
+    //    NodeComputer* fromNode = GetNode(from);
+    //    int waitTime = BackoffTimer(_nodeArr.size());
 
-        fromNode->Wait(_systemClock, waitTime, dest);
-    }
+    //    std::string nodeName = "Node" + std::to_string(from);
+    //    msg.Set(_systemClock, "Exponential Back-off Time: " + std::to_string(waitTime) + " msec");
+    //    AddLogToFile(nodeName, msg);
+
+    //    fromNode->Wait(_systemClock, waitTime, dest);
+    //}
+}
+
+Result* LinkBus::ProcessRequest(const Request* request)
+{
+	int from = request->from;
+	int dest = request->dest;
+	RESULT_TYPE resultType;
+
+	MessageData msg(_systemClock, "Data Send Request To Node" + std::to_string(dest));
+	std::string path = "Node" + std::to_string(from);
+	AddLogToFile(path, msg);
+
+	if (LinkBus::CollisionCheck(dest))
+	{
+		MessageData msg(_systemClock, "Accept: Node" + std::to_string(from) + " Data Send Request To Node" + std::to_string(dest));
+		AddLogToFile("Link", msg);
+
+		// from 에게 알림
+		msg.Set(_systemClock, "Data Send Request Accept from Link");
+		path = "Node" + std::to_string(from);
+		AddLogToFile(path, msg);
+
+		// dest 에게 알림
+		msg.Set(_systemClock, "Data Receive Start from Node" + std::to_string(from));
+		path = "Node" + std::to_string(dest);
+		AddLogToFile(path, msg);
+
+		resultType = RESULT_TYPE::SUCCESS;
+	}
+	else
+	{
+		// Link에게 알림
+		MessageData msg(_systemClock, "Reject: Node" + std::to_string(from) + " Data Send Request To Node" + std::to_string(dest));
+		AddLogToFile("Link", msg);
+
+		// from 에게 알림
+		msg.Set(_systemClock, "Data Send Request Reject from Link");
+		path = "Node" + std::to_string(from);
+		AddLogToFile(path, msg);
+
+		// back-off 알고리즘
+		int waitTime = BackoffTimer(_nodeArr.size());
+		std::string nodeName = "Node" + std::to_string(from);
+		msg.Set(_systemClock, "Exponential Back-off Time: " + std::to_string(waitTime) + " msec");
+		AddLogToFile(nodeName, msg);
+
+		resultType = RESULT_TYPE::FAILED;
+	}
+
+	Result* result = new Result(from, dest, result->requestType, request->count, resultType);
+	return result;
+}
+
+void LinkBus::SendResult(Result* result)
+{
+	NodeComputer* fromNode = GetNode(result->from);
+	fromNode->GetResult(result);
 }
 
 bool LinkBus::CollisionCheck(int dest)
