@@ -7,49 +7,83 @@ const int NODE_NUM = 4;
 
 namespace DC
 {
-	enum class REQUEST_TYPE
+	enum class REQUEST_STATE_TYPE
 	{
-		SEND_REQUEST,
-		RETRY_REQUEST
+		SEND_REQUEST, // 링크에게 전송 요청
+		RETRY_SEND_REQUEST, // 링크에게 재전송 요청
+        WAIT_REQUEST, // 링크가 기다려야하는 목록
+        REQUEST_SUCCESS, // 노드의 요청이 성공했음
+        REQUEST_FAILED, // 노드의 요청이 실패
+        TRANSMIT_FINISHED // 노드의 전송이 끝남
 	};
 
-	struct Request
-	{
-		int from;
-		int dest;
-		REQUEST_TYPE type;
-		int count;
-
-		Request(int p_from, int p_dest, REQUEST_TYPE p_type, int p_count) : from(p_from), dest(p_dest), type(p_type), count(p_count) {}
-		Request(int p_from, int p_dest) { Request(p_from, p_dest, REQUEST_TYPE::SEND_REQUEST, 0); }
-	};
-
-	enum class RESULT_TYPE
-	{
-		SUCCESS,
-		FAILED
-	};
-
-	struct Result
-	{
-		int from;
-		int dest;
-		REQUEST_TYPE requestType;
-		int count;
-		int waitTime;
-		RESULT_TYPE result;
-
-		Result(int p_from, int p_dest, REQUEST_TYPE p_requestType, int p_count, RESULT_TYPE p_result) : from(p_from), dest(p_dest), requestType(p_requestType), count(p_count), result(p_result) {}
-		void SetWaitTime(int p_waitTime) { waitTime = p_waitTime; }
-	};
-
-    struct MessageData
+    struct RequestData
     {
-        int t;
-        std::string logData;
+        int sendTime;
+        REQUEST_STATE_TYPE state;
+        int waitTime; // 기다려야한다면 기다리는 시간
+        int count; // back-off 알고리즘을 수행한 횟수
 
-        MessageData(int p_t, std::string p_logData) : t(p_t), logData(p_logData) {}
-        void Set(int p_t, std::string p_logData) { t = p_t; logData = p_logData; }
+        RequestData(int p_sendTime, REQUEST_STATE_TYPE p_state, int p_watiTIme, int p_count) : sendTime(p_sendTime), state(p_state), waitTime(p_watiTIme), count(p_count) {}
+        RequestData(int p_sendTime, REQUEST_STATE_TYPE p_state) : RequestData(p_sendTime, p_state, 0, 0) {}
+        RequestData(const RequestData& other) : RequestData(other.sendTime, other.state, other.waitTime, other.count) {}
+        RequestData() : RequestData(0, REQUEST_STATE_TYPE::WAIT_REQUEST, 0, 0) {}
+        void Set(int p_sendTime, REQUEST_STATE_TYPE p_state, int p_watiTIme, int p_count)
+        {
+            sendTime = p_sendTime;
+            state = p_state;
+            waitTime = p_watiTIme;
+            count = p_count;
+        }
+        void Set(int p_sendTime, REQUEST_STATE_TYPE p_state)
+        {
+            this->Set(p_sendTime, p_state, 0, 0);
+        }
+        void Set(const RequestData& other)
+        {
+            sendTime = other.sendTime;
+            state = other.state;
+            waitTime = other.waitTime;
+            count = other.count;
+        }
+    };
+
+    struct Request
+    {
+        int sender;
+        int receiver;
+        RequestData data;
+
+        Request(int p_sender, int p_receiver, RequestData p_data) : sender(p_sender), receiver(p_receiver), data(p_data){}
+        Request(const Request& other) : Request(other.sender, other.receiver, other.data) {}
+        Request() : Request(-1, -1, RequestData(0, REQUEST_STATE_TYPE::WAIT_REQUEST, 0, 0)) {}
+    };
+
+    class Object
+    {
+    protected:
+        bool _isActive;
+
+        std::queue<Request*> requestQueue;
+        virtual void Update();
+        virtual bool ProcessRequest(const Request* request) = 0;
+        Object() { _isActive = true; }
+        virtual ~Object()
+        {
+            while (!this->requestQueue.empty())
+            {
+                // Result 처리
+                Request* request = this->requestQueue.front();
+                this->requestQueue.pop();
+                delete(request); // 메모리 해제
+            }
+        }
+    public:
+        virtual void GetRequest(Request* request) 
+        { 
+            if (request != nullptr) 
+                this->requestQueue.push(request); 
+        }
     };
 
     class NodeComputer;
@@ -58,84 +92,69 @@ namespace DC
     enum class NODE_STATE
     {
         WAITING,
-        NORMAL,
-        RETRY
+        TRANSMITING,
+        NORMAL
     };
 
-    class NodeComputer
+    class NodeComputer : public Object
     {
     private:
         int _id;
 		int _transmitTime = 5;
         LinkBus* _linkedBus;
-        bool _isActive;
 
-		std::queue<Result*> resultQueue; // 메모리 해제해야함?
-
-        int _prevTime;
-        int _waitTime;
-        int _savedDest;
-        std::string _msg;
+        Request _savedRequest;
+        std::queue<Request*> requestQueue;
     public:
         NODE_STATE _state;
 
-        NodeComputer(int p_id, LinkBus* p_linkBus) : _id(p_id), _linkedBus(p_linkBus)
+        NodeComputer(int p_id, LinkBus* p_linkBus) : _id(p_id), _linkedBus(p_linkBus), Object()
         {
-            _isActive = true;
-            _savedDest = 0;
-            _prevTime = 0;
-            _waitTime = 0;
+            _savedRequest = Request();
             _state = NODE_STATE::NORMAL;
         }
         void Init();
-        void Update();
-        void Wait(int t, int range, std::string msg);
-        void Wait(int t, int range, int dest);
 
+        virtual void Update();
+		virtual bool ProcessRequest(const Request* request);
+
+        void RetrySendRequest(const Request* request);
+        void SendRequest(int receiver);
         void RandomSomething(int probability, void (NodeComputer::*func)(int));
-        void SendRequest(int dest);
-		void GetResult(Result* result);
-		void ProcessResult(const Result* result);
+        bool IsQueueEmpty(){ return requestQueue.empty(); }
         bool IsActive() { return _isActive; }
         int GetId() { return _id; }
+        int GetTransmitTime() { return _transmitTime; }
         ~NodeComputer();
     };
 
-    class LinkBus
+    class LinkBus : public Object
     {
     private:
         int _systemClock;
         int _timeLimit;
-        bool _isActive;
         bool _isValid;
-
-		std::queue<Request*> requestQueue;
-
-        int _prevTime;
-        int _waitTime;
-        std::string _msg;
     public:
         std::vector<NodeComputer*> _nodeArr;
 
-        LinkBus(int p_timeLimit) : _timeLimit(p_timeLimit) 
+        LinkBus(int p_timeLimit) : _timeLimit(p_timeLimit) , Object()
         { 
-            _prevTime = 0;
-            _waitTime = 0;
-            _systemClock = 0; 
-            _isActive = true; 
+            _systemClock = 0;  
             _isValid = true;
         }
         void Init();
-        void Update();
 
-        void GetRequest(Request* request);
-		Result* ProcessRequest(const Request* request);
-		void SendResult(Result* result);
+        virtual void Update();
+        virtual bool ProcessRequest(const Request* request);
+
+        void ProcessSenderRequest(const Request* request);
+        bool ProcessWait(const Request* request);
+        bool CollisionCheck(int dest);
+        bool AlramWaitFinished(const Request* request);
 
         NodeComputer* GetNode(int id);
-        bool CollisionCheck(int dest);
         int GetSystemClock() { return _systemClock; }
         bool IsActive() { return _isActive; }
-        ~LinkBus();
+        virtual ~LinkBus();
     };
 }
