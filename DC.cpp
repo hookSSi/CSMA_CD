@@ -202,18 +202,6 @@ void NodeComputer::SendRequest(int receiver)
 	this->_state = NODE_STATE::WAITING;
 }
 
-/// <summary>
-/// 재전송 요청
-/// </summary>
-/// <param name="request"></param>
-void NodeComputer::RetrySendRequest(const Request* request)
-{
-    RequestData requestData(_linkedBus->GetSystemClock(), REQUEST_STATE_TYPE::RETRY_SEND_REQUEST, 0, request->data.count);
-    Request* newRequest = new Request(request->sender, request->receiver, requestData);
-    _linkedBus->GetRequest(newRequest);
-    this->_state = NODE_STATE::WAITING;
-}
-
 void NodeComputer::RandomSomething(int probability, void (NodeComputer::*func)(int))
 {
     int rndom = Random();

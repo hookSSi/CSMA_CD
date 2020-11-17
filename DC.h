@@ -3,8 +3,6 @@
 #include<vector>
 #include<queue>
 
-const int NODE_NUM = 4;
-
 namespace DC
 {
 	enum class REQUEST_STATE_TYPE
@@ -19,7 +17,7 @@ namespace DC
 
     struct RequestData
     {
-        int sendTime;
+        int sendTime; // 보내는 시간
         REQUEST_STATE_TYPE state;
         int waitTime; // 기다려야한다면 기다리는 시간
         int count; // back-off 알고리즘을 수행한 횟수
@@ -103,14 +101,12 @@ namespace DC
 		int _transmitTime = 5;
         LinkBus* _linkedBus;
 
-        Request _savedRequest;
         std::queue<Request*> requestQueue;
     public:
         NODE_STATE _state;
 
         NodeComputer(int p_id, LinkBus* p_linkBus) : _id(p_id), _linkedBus(p_linkBus), Object()
         {
-            _savedRequest = Request();
             _state = NODE_STATE::NORMAL;
         }
         void Init();
@@ -118,7 +114,6 @@ namespace DC
         virtual void Update();
 		virtual bool ProcessRequest(const Request* request);
 
-        void RetrySendRequest(const Request* request);
         void SendRequest(int receiver);
         void RandomSomething(int probability, void (NodeComputer::*func)(int));
         bool IsQueueEmpty(){ return requestQueue.empty(); }
